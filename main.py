@@ -47,11 +47,21 @@ class Fork:
         self.available = True
         self.queue = []  # Queue of threads waiting to use it.
 
+    # To acquire a fork, we first check to see
+    # whether it is available. If not, we block the current thread on the
+    # queue, and then yield. When we get to run again, it's our turn, so we
+    # mark the fork as being in use.
     def acquire(self):
         if not self.available:
             block(self.queue)
             yield
         self.available = False
+
+    # To release the fork, we mark it as available and then unblock the
+    # thread at the head of the queue, if any.
+    def release(self):
+        self.available = True
+        unblock(self.queue)
 
 
 # The core loop of the scheduler will repeatedly take the thread at the
@@ -69,15 +79,51 @@ def run():
             expire_timeslice(g)
 
 
-# We've got enough so far to try a simple test.
-def person(name, count):
-    for i in range(count):
-        print(f"{name} running")
-        yield
+# # We've got enough so far to try a simple test.
+# def person(name, count):
+#     for i in range(count):
+#         print(f"{name} running")
+#         yield
+#
+# schedule(person("John", 2))
+# schedule(person("Michael", 3))
+# schedule(person("Terry", 4))
+#
+# run()
 
 
-schedule(person("John", 2))
-schedule(person("Michael", 3))
-schedule(person("Terry", 4))
+# Next we need a life cycle for a philosopher.
+def philosopher(
+    name, lifetime, think_time, eat_time, left_fork: Fork, right_fork: Fork
+):
+    for i in range(lifetime):
+        for j in range(think_time):
+            print(f"{name} thinking")
+            yield
+
+        print(f"{name} waiting for fork {left_fork.id}")
+        yield from left_fork.acquire()
+        print(f"{name} acquired fork {left_fork.id}")
+
+        print(f"{name} waiting for fork {right_fork.id}")
+        yield from right_fork.acquire()
+        print(f"{name} acquired fork {right_fork.id}")
+
+        for j in range(eat_time):
+            print(f"{name} eating spaghetti")
+            yield
+
+        print(f"{name} releasing forks {left_fork.id} and {right_fork.id}")
+        left_fork.release()
+        right_fork.release()
+
+    print(f"{name} leaving the table")
+
+
+# Now we can set up a scenario.
+forks = [Fork(i) for i in range(3)]
+schedule(philosopher("Plato", 2, 2, 3, forks[0], forks[1]))
+schedule(philosopher("Socrates", 3, 3, 1, forks[1], forks[2]))
+schedule(philosopher("Euclid", 4, 1, 4, forks[2], forks[0]))
 
 run()
