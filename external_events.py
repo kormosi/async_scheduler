@@ -6,24 +6,24 @@ ready_list = []
 
 
 # A way of getting a thread into the scheduling system
-def schedule(g):
-    ready_list.append(g)
+def schedule(thread):
+    ready_list.append(thread)
 
 
 # If the thread is still at the head of the ready list after it has
 # yielded, we move it to the end, so that the ready threads will run
 # round-robin fashion.
-def expire_timeslice(g):
-    if ready_list and ready_list[0] is g:
+def move_thread_to_back_of_queue(thread):
+    if ready_list and ready_list[0] is thread:
         del ready_list[0]
-        ready_list.append(g)
+        ready_list.append(thread)
 
 
 # When the thread finishes, we use the following function to remove
 # it from the scheduling system.
-def unschedule(g):
-    if g in ready_list:
-        ready_list.remove(g)
+def unschedule(thread):
+    if thread in ready_list:
+        ready_list.remove(thread)
 
 
 # This removes the currently running thread from the ready list and
@@ -69,14 +69,14 @@ class Fork:
 def run():
     global current
     while ready_list:  # Meaning until it's empty
-        g = ready_list[0]
-        current = g
+        thread = ready_list[0]
+        current = thread
         try:
-            next(g)
+            next(thread)
         except StopIteration:
-            unschedule(g)
+            unschedule(thread)
         else:
-            expire_timeslice(g)
+            move_thread_to_back_of_queue(thread)
 
 
 # # We've got enough so far to try a simple test.
@@ -122,8 +122,12 @@ def philosopher(
 
 # Now we can set up a scenario.
 forks = [Fork(i) for i in range(3)]
-schedule(philosopher("Plato", 2, 2, 3, forks[0], forks[1]))
-schedule(philosopher("Socrates", 3, 3, 1, forks[1], forks[2]))
-schedule(philosopher("Euclid", 4, 1, 4, forks[2], forks[0]))
+schedule(philosopher("Plato",    1, 1, 2, forks[0], forks[1]))
+schedule(philosopher("Socrates", 2, 2, 1, forks[1], forks[2]))
+schedule(philosopher("Euclid",   3, 2, 2, forks[2], forks[0]))
+
+# forks = [Fork(i) for i in range(2)]
+# schedule(philosopher("Plato",    1, 1, 2, forks[0], forks[1]))
+# schedule(philosopher("Socrates", 2, 2, 1, forks[1], forks[0]))
 
 run()
