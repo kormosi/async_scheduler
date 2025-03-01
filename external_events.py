@@ -1,3 +1,5 @@
+from select import select
+
 # A global variable to hold the currently running thread
 current = None
 
@@ -41,29 +43,6 @@ def unblock(queue):
         schedule(g)
 
 
-class Fork:
-    def __init__(self, id):
-        self.id = id
-        self.available = True
-        self.queue = []  # Queue of threads waiting to use it.
-
-    # To acquire a fork, we first check to see
-    # whether it is available. If not, we block the current thread on the
-    # queue, and then yield. When we get to run again, it's our turn, so we
-    # mark the fork as being in use.
-    def acquire(self):
-        if not self.available:
-            block(self.queue)
-            yield
-        self.available = False
-
-    # To release the fork, we mark it as available and then unblock the
-    # thread at the head of the queue, if any.
-    def release(self):
-        self.available = True
-        unblock(self.queue)
-
-
 # The core loop of the scheduler will repeatedly take the thread at the
 # head of the queue and run it until it yields:
 def run():
@@ -79,55 +58,95 @@ def run():
             move_thread_to_back_of_queue(thread)
 
 
-# # We've got enough so far to try a simple test.
-# def person(name, count):
-#     for i in range(count):
-#         print(f"{name} running")
-#         yield
-#
-# schedule(person("John", 2))
-# schedule(person("Michael", 3))
-# schedule(person("Terry", 4))
-#
-# run()
+def run2():
+    while True:
+        run()
+        if not wait_for_event():
+            return
 
 
-# Next we need a life cycle for a philosopher.
-def philosopher(
-    name, lifetime, think_time, eat_time, left_fork: Fork, right_fork: Fork
-):
-    for i in range(lifetime):
-        for j in range(think_time):
-            print(f"{name} thinking")
-            yield
-
-        print(f"{name} waiting for fork {left_fork.id}")
-        yield from left_fork.acquire()
-        print(f"{name} acquired fork {left_fork.id}")
-
-        print(f"{name} waiting for fork {right_fork.id}")
-        yield from right_fork.acquire()
-        print(f"{name} acquired fork {right_fork.id}")
-
-        for j in range(eat_time):
-            print(f"{name} eating spaghetti")
-            yield
-
-        print(f"{name} releasing forks {left_fork.id} and {right_fork.id}")
-        left_fork.release()
-        right_fork.release()
-
-    print(f"{name} leaving the table")
+# We will need a data structure to hold threads waiting for files. Each
+# file needs two queues associated with it, for threads waiting to read
+# and write respectively.
+class FdQueues:
+    def __init__(self):
+        self.readq = []
+        self.writeq = []
 
 
-# Now we can set up a scenario.
-forks = [Fork(i) for i in range(3)]
-schedule(philosopher("Plato",    1, 1, 2, forks[0], forks[1]))
-schedule(philosopher("Socrates", 2, 2, 1, forks[1], forks[2]))
-schedule(philosopher("Euclid",   3, 2, 2, forks[2], forks[0]))
+# We will keep a mapping from file objects to their associated FdQueue
+# instances.
+fd_queues = {}
 
-# forks = [Fork(i) for i in range(2)]
-# schedule(philosopher("Plato",    1, 1, 2, forks[0], forks[1]))
-# schedule(philosopher("Socrates", 2, 2, 1, forks[1], forks[0]))
 
-run()
+# The following function retrieves the queues for a given fd, creating
+# new ones if they don't already exist.
+def get_fd_queues(fd):
+    q = fd_queues.get(fd)
+    if not q:
+        q = FdQueues()
+        fd_queues[fd] = q
+    return q
+
+
+# Now we can write a new pair of scheduling primitives to block on a file.
+def block_for_reading(fd):
+    block(get_fd_queues(fd).readq)
+
+
+def block_for_writing(fd):
+    block(get_fd_queues(fd).writeq)
+
+
+# We'll also want a way of removing a file from the fd_queues when
+# we've finished with it, so we'll add a function to close it and
+# clean up.
+def close_fd(fd):
+    fd_queues.pop(fd)
+    fd.close()
+
+
+# Now we can write wait_for_event(). It's a bit long winded, but fairly
+# straightforward. We build lists of file objects having nonempty read
+# or write queues, pass them to select(), and for each one that's ready,
+# we unblock the thread at the head of the relevant queue. If there are
+# no threads waiting on any files, we return False to tell the scheduler
+# there's no more work to do.
+def wait_for_event():
+    read_fds = []
+    write_fds = []
+    for fd, q in fd_queues.items():
+        if q.readq:
+            read_fds.append(fd)
+        if q.writeq:
+            write_fds.append(fd)
+    if not (read_fds or write_fds):
+        return False
+    read_fds, write_fds, _ = select(read_fds, write_fds, [])
+    for fd in read_fds:
+        unblock(fd_queues[fd].readq)
+    for fd in write_fds:
+        unblock(fd_queues[fd].writeq)
+    return True
+
+
+import sys
+
+
+# At this point we can try a quick test to see if everything works
+# so far.
+def loop():
+    while True:
+        print("Waiting for input")
+        block_for_reading(sys.stdin)
+        yield
+        print("Input is ready")
+        line = sys.stdin.readline()
+        print(f"Input was '{repr(line)}'")
+        if not line:
+            break
+
+
+schedule(loop())
+
+run2()
