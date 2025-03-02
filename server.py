@@ -1,4 +1,4 @@
-import sys
+import socket
 from select import select
 
 # A global variable to hold the currently running thread
@@ -107,6 +107,7 @@ def close_fd(fd):
     fd_queues.pop(fd)
     fd.close()
 
+
 # Now we can write wait_for_event(). It's a bit long winded, but fairly
 # straightforward. We build lists of file objects having nonempty read
 # or write queues, pass them to select(), and for each one that's ready,
@@ -146,9 +147,9 @@ def sock_accept(sock):
 # have to worry about reading too much.) We also close the socket on
 # EOF, since we won't be reading from it again after that.
 def sock_readline(sock):
-    buf = ""
+    buf = b""
     # TODO can be [-1] only?
-    while buf[-1:] != "\n":
+    while buf[-1:] != b"\n":
         block_for_reading(sock)
         yield
         data = sock.recv(1024)
@@ -167,25 +168,59 @@ def sock_write(sock, data):
     while data:
         block_for_writing(sock)
         yield
-        n = sock.send(data)
+        n = sock.send(data.encode("utf-8"))
         data = data[n:]
 
 
-# At this point we can try a quick test to see if everything works
-# so far.
-def loop():
+# Now we're ready to write the main loop of the server. It will set up a
+# listening socket, then repeatedly accept connections and spawn a
+# thread to handle each one.
+port = 4200
+
+
+def listener():
+    lsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    lsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    lsock.bind(("", port))
+    lsock.listen(5)
     while True:
-        print("Waiting for input")
-        block_for_reading(sys.stdin)
-        yield
-        # I don't understand why the prompt gets displayed the following print statement.
-        # But no matter for now.
-        print("Input is ready")
-        line = sys.stdin.readline()
-        print(f"Input was '{repr(line)}'")
+        csock, addr = yield from sock_accept(lsock)
+        print(f"Listener: Accepted connection from {addr}")
+        schedule(handler(csock))
+
+
+# The handler function handles the interaction with one client session.
+def handler(sock):
+    while True:
+        line = yield from sock_readline(sock)
         if not line:
             break
+        try:
+            n = parse_request(line.decode("utf-8"))
+            yield from sock_write(sock, "100 SPAM FOLLOWS\n")
+            for i in range(n):
+                yield from sock_write(sock, "spam glorious spam\n")
+        except BadRequest:
+            yield from sock_write(sock, "400 WE ONLY SERVE SPAM\n")
 
 
-schedule(loop())
+class BadRequest(Exception):
+    pass
+
+
+def parse_request(line):
+    tokens = line.split()
+    if len(tokens) != 2 or tokens[0] != "SPAM":
+        raise BadRequest
+    try:
+        n = int(tokens[1])
+    except ValueError:
+        raise BadRequest
+    if n < 1:
+        raise BadRequest
+    return n
+
+
+# All we need to do now is spawn the main loop and run the scheduler.
+schedule(listener())
 run2()
